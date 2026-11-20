@@ -11,7 +11,7 @@ From the repository root:
 ```
 ./gradlew -p roadpack installDist test
 roadpack/build/install/roadpack/bin/roadpack <extract.osm.pbf> <out dir>                      # writes local.rpk, main.rpk
-java -cp "roadpack/build/install/roadpack/lib/*" roadpack.route.BenchKt <out dir>/local.rpk    # route timing
+java -cp "roadpack/build/install/roadpack/lib/*" roadpack.bench.BenchKt <out dir>/local.rpk    # route timing
 ./gradlew -p roadpack benchJar     # the same benchmark as one jar, to dex with d8 and run on a phone with app_process
 ```
 

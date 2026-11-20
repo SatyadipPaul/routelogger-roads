@@ -10,9 +10,11 @@ import kotlin.math.sqrt
  * A road graph joined from one or more tiles. Nodes with identical coordinates in different
  * tiles (the cut points at tile edges) become one node. Costs are travel time in deciseconds.
  */
-class Graph(tiles: List<Tile>) {
+class Graph(val tiles: List<Tile>) {
     val lat: IntArray; val lon: IntArray
     val fStart: IntArray; val fTo: IntArray; val fCost: IntArray; val fLen: IntArray
+    /** For each forward arc: the tile and edge it came from, and whether it runs the edge backwards. */
+    val fTile: IntArray; val fEdge: IntArray; val fRev: BooleanArray
     val bStart: IntArray; val bTo: IntArray; val bCost: IntArray
     val maxKmh: Int
     val size: Int get() = lat.size
@@ -22,20 +24,21 @@ class Graph(tiles: List<Tile>) {
         val index = HashMap<Long, Int>()
         val la = IntList(); val lo = IntList()
         val aFrom = IntList(); val aTo = IntList(); val aCost = IntList(); val aLen = IntList()
+        val aTile = IntList(); val aEdge = IntList(); val aRev = IntList()
         var vmax = 1
-        for (t in tiles) {
+        for ((ti, t) in tiles.withIndex()) {
             val local = IntArray(t.lat.size) { i ->
                 val key = (t.lat[i].toLong() shl 32) or (t.lon[i].toLong() and 0xffffffffL)
                 index.getOrPut(key) { la.add(t.lat[i]); lo.add(t.lon[i]); la.size - 1 }
             }
-            for (e in t.edges) {
+            for ((ei, e) in t.edges.withIndex()) {
                 val kmh = speedKmh(e.cls, e.link, e.maxKmh)
                 if (kmh > vmax) vmax = kmh
                 var cost = (e.lengthDm * 3.6 / kmh).toInt().coerceAtLeast(1)
                 for (m in e.marks) cost += PENALTY_DS[m.kind]
                 val a = local[e.from]; val b = local[e.to]
-                aFrom.add(a); aTo.add(b); aCost.add(cost); aLen.add(e.lengthDm)
-                if (!e.oneway) { aFrom.add(b); aTo.add(a); aCost.add(cost); aLen.add(e.lengthDm) }
+                aFrom.add(a); aTo.add(b); aCost.add(cost); aLen.add(e.lengthDm); aTile.add(ti); aEdge.add(ei); aRev.add(0)
+                if (!e.oneway) { aFrom.add(b); aTo.add(a); aCost.add(cost); aLen.add(e.lengthDm); aTile.add(ti); aEdge.add(ei); aRev.add(1) }
             }
         }
         lat = la.toArray(); lon = lo.toArray(); maxKmh = vmax
@@ -44,11 +47,33 @@ class Graph(tiles: List<Tile>) {
         for (i in 0 until m) { fStart[aFrom[i] + 1]++; bStart[aTo[i] + 1]++ }
         for (i in 0 until n) { fStart[i + 1] += fStart[i]; bStart[i + 1] += bStart[i] }
         fTo = IntArray(m); fCost = IntArray(m); fLen = IntArray(m); bTo = IntArray(m); bCost = IntArray(m)
+        fTile = IntArray(m); fEdge = IntArray(m); fRev = BooleanArray(m)
         val fp = fStart.copyOf(n); val bp = bStart.copyOf(n)
         for (i in 0 until m) {
             val f = fp[aFrom[i]]++; fTo[f] = aTo[i]; fCost[f] = aCost[i]; fLen[f] = aLen[i]
+            fTile[f] = aTile[i]; fEdge[f] = aEdge[i]; fRev[f] = aRev[i] == 1
             val b = bp[aTo[i]]++; bTo[b] = aFrom[i]; bCost[b] = aCost[i]
         }
+    }
+
+    /**
+     * The [k] nodes nearest a point, nearest first: ones a route can leave from ([leaving]) or
+     * arrive at. Trying several guards against a node on a cut-off scrap of road.
+     */
+    fun nearestK(latE6: Int, lonE6: Int, k: Int, leaving: Boolean): IntArray {
+        val kx = cos(Math.toRadians(latE6 / 1e6))
+        val best = IntArray(k) { -1 }; val bd = DoubleArray(k) { Double.MAX_VALUE }
+        for (i in lat.indices) {
+            val ok = if (leaving) fStart[i + 1] > fStart[i] else bStart[i + 1] > bStart[i]
+            if (!ok) continue
+            val dy = (lat[i] - latE6).toDouble(); val dx = (lon[i] - lonE6) * kx
+            val d = dx * dx + dy * dy
+            if (d >= bd[k - 1]) continue
+            var j = k - 1
+            while (j > 0 && bd[j - 1] > d) { bd[j] = bd[j - 1]; best[j] = best[j - 1]; j-- }
+            bd[j] = d; best[j] = i
+        }
+        return best.filter { it >= 0 }.toIntArray()
     }
 
     fun nearest(latE6: Int, lonE6: Int): Int {
@@ -76,7 +101,57 @@ class Graph(tiles: List<Tile>) {
     }
 }
 
-class Route(val nodes: IntArray, val timeDs: Int, val lengthDm: Long, val settled: Int)
+class Route(val nodes: IntArray, val timeDs: Int, val lengthDm: Long, val settled: Int, val arcs: IntArray = IntArray(0))
+
+/** A mark passed on a route, [atDm] from its start. */
+class RouteMark(val kind: Int, val atDm: Long)
+
+/** The drawn line of a route, every shape point included, in micro-degrees. */
+fun Graph.shape(route: Route): Pair<IntArray, IntArray> {
+    val la = IntList(); val lo = IntList()
+    if (route.arcs.isEmpty()) { route.nodes.forEach { la.add(lat[it]); lo.add(lon[it]) }; return la.toArray() to lo.toArray() }
+    for (arc in route.arcs) {
+        val t = tiles[fTile[arc]]; val e = t.edges[fEdge[arc]]
+        val n = e.shapeLat.size + 2
+        for (k in 0 until n) {
+            val i = if (fRev[arc]) n - 1 - k else k
+            if (k == 0 && la.size > 0) continue
+            when (i) {
+                0 -> { la.add(t.lat[e.from]); lo.add(t.lon[e.from]) }
+                n - 1 -> { la.add(t.lat[e.to]); lo.add(t.lon[e.to]) }
+                else -> { la.add(e.shapeLat[i - 1]); lo.add(e.shapeLon[i - 1]) }
+            }
+        }
+    }
+    return la.toArray() to lo.toArray()
+}
+
+/** Signals, breakers and the rest passed along a route, in order. */
+fun Graph.marks(route: Route): List<RouteMark> {
+    val out = ArrayList<RouteMark>()
+    var at = 0L
+    for (arc in route.arcs) {
+        val e = tiles[fTile[arc]].edges[fEdge[arc]]
+        val ms = if (fRev[arc]) e.marks.map { RouteMark(it.kind, at + e.lengthDm - it.atDm) }.reversed()
+        else e.marks.map { RouteMark(it.kind, at + it.atDm) }
+        out.addAll(ms)
+        at += e.lengthDm
+    }
+    return out
+}
+
+/** The named roads of a route with the metres driven on each, longest first. */
+fun Graph.roads(route: Route): List<Pair<String, Long>> {
+    val byName = LinkedHashMap<String, Long>()
+    for (arc in route.arcs) {
+        val t = tiles[fTile[arc]]; val e = t.edges[fEdge[arc]]
+        if (e.name >= 0) byName.merge(t.names[e.name], e.lengthDm / 10L, Long::plus)
+    }
+    return byName.entries.sortedByDescending { it.value }.map { it.key to it.value }
+}
+
+/** Whether any part of a route is a toll road. */
+fun Graph.toll(route: Route): Boolean = route.arcs.any { tiles[fTile[it]].edges[fEdge[it]].toll }
 
 /** Shortest-time search. Reuse one Router per graph; it is not thread-safe. */
 class Router(private val g: Graph) {
@@ -139,12 +214,13 @@ class Router(private val g: Graph) {
         while (v != -1) { tail.add(v); v = pb[v] }
         val nodes = head + tail.toArray()
         var len = 0L
+        val arcs = IntArray(nodes.size - 1)
         for (i in 0 until nodes.size - 1) {
-            var best = Int.MAX_VALUE; var bl = 0
-            for (a in g.fStart[nodes[i]] until g.fStart[nodes[i] + 1]) if (g.fTo[a] == nodes[i + 1] && g.fCost[a] < best) { best = g.fCost[a]; bl = g.fLen[a] }
-            len += bl
+            var best = Int.MAX_VALUE; var bl = 0; var ba = -1
+            for (a in g.fStart[nodes[i]] until g.fStart[nodes[i] + 1]) if (g.fTo[a] == nodes[i + 1] && g.fCost[a] < best) { best = g.fCost[a]; bl = g.fLen[a]; ba = a }
+            len += bl; arcs[i] = ba
         }
-        return Route(nodes, mu, len, settled)
+        return Route(nodes, mu, len, settled, arcs)
     }
 
     /** Plain Dijkstra from s to t, for checking [route]. */

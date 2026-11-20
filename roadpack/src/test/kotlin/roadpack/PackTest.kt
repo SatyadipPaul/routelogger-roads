@@ -9,6 +9,9 @@ import roadpack.format.RoadClass
 import roadpack.format.Tile
 import roadpack.route.Graph
 import roadpack.route.Router
+import roadpack.route.marks
+import roadpack.route.roads
+import roadpack.route.shape
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -67,5 +70,23 @@ class PackTest {
         assertEquals(20_000L, r.route(s, t)!!.lengthDm)
         assertEquals(r.dijkstra(s, t), r.route(s, t)!!.timeDs)
         assertNull(r.route(t, s))
+    }
+
+    @Test fun routeCarriesShapeMarksAndNamesInDrivingOrder() {
+        // 0 -> 1 has a shape point and a signal 100 m in; 1 -> 2 is driven backwards along its edge.
+        val t = Tile(10, 0, 0, intArrayOf(19_000_000, 19_001_000, 19_002_000), intArrayOf(72_900_000, 72_900_000, 72_900_000),
+            listOf(
+                Edge(0, 1, 1110, RoadClass.PRIMARY, false, false, false, 0, 0, 0, intArrayOf(19_000_500), intArrayOf(72_900_100), listOf(Mark(MarkKind.SIGNAL, 1000))),
+                Edge(2, 1, 1110, RoadClass.PRIMARY, false, false, false, 0, 0, 1, IntArray(0), IntArray(0), listOf(Mark(MarkKind.BREAKER, 100))),
+            ), listOf("Ghodbunder Road", "Eastern Express Highway"), emptyList())
+        val g = Graph(listOf(t))
+        val r = Router(g).route(g.nearest(19_000_000, 72_900_000), g.nearest(19_002_000, 72_900_000))!!
+        val (la, lo) = g.shape(r)
+        assertContentEquals(intArrayOf(19_000_000, 19_000_500, 19_001_000, 19_002_000), la)
+        assertEquals(72_900_100, lo[1])
+        val ms = g.marks(r)
+        assertEquals(listOf(MarkKind.SIGNAL to 1000L, MarkKind.BREAKER to 1110L + 1010L), ms.map { it.kind to it.atDm })
+        assertEquals(listOf("Ghodbunder Road", "Eastern Express Highway"), g.roads(r).map { it.first })
+        assertEquals(1, g.nearestK(19_000_000, 72_900_000, 3, leaving = true).first().let { g.lat[it] - 18_999_999 })
     }
 }

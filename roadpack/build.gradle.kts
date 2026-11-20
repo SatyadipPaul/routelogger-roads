@@ -23,7 +23,7 @@ tasks.test { useJUnitPlatform() }
 // The format, reader and router only, with the Kotlin runtime: dexed and run on the phone.
 tasks.register<Jar>("benchJar") {
     archiveFileName.set("bench.jar")
-    from(sourceSets.main.get().output) { include("roadpack/format/**", "roadpack/route/**") }
+    from(sourceSets.main.get().output) { include("roadpack/format/**", "roadpack/route/**", "roadpack/bench/**") }
     from({ configurations.runtimeClasspath.get().filter { it.name.startsWith("kotlin-stdlib") }.map { zipTree(it) } }) {
         exclude("META-INF/**")
     }
