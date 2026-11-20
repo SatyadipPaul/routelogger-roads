@@ -9,7 +9,9 @@ import roadpack.format.RoadClass
 import roadpack.format.Tile
 import roadpack.route.Graph
 import roadpack.route.Router
+import roadpack.route.limits
 import roadpack.route.marks
+import roadpack.route.tollStarts
 import roadpack.route.roads
 import roadpack.route.shape
 import java.io.File
@@ -88,5 +90,19 @@ class PackTest {
         assertEquals(listOf(MarkKind.SIGNAL to 1000L, MarkKind.BREAKER to 1110L + 1010L), ms.map { it.kind to it.atDm })
         assertEquals(listOf("Ghodbunder Road", "Eastern Express Highway"), g.roads(r).map { it.first })
         assertEquals(1, g.nearestK(19_000_000, 72_900_000, 3, leaving = true).first().let { g.lat[it] - 18_999_999 })
+    }
+
+    @Test fun routeListsLimitChangesAndTollStarts() {
+        val t = Tile(10, 0, 0, intArrayOf(19_000_000, 19_001_000, 19_002_000, 19_003_000), IntArray(4) { 72_900_000 },
+            listOf(
+                Edge(0, 1, 1000, RoadClass.PRIMARY, false, false, false, 50, 0, -1, IntArray(0), IntArray(0), emptyList()),
+                Edge(1, 2, 1000, RoadClass.PRIMARY, false, false, true, 0, 0, -1, IntArray(0), IntArray(0), emptyList()),
+                Edge(2, 3, 1000, RoadClass.PRIMARY, false, false, true, 30, 0, -1, IntArray(0), IntArray(0), emptyList()),
+            ), emptyList(), emptyList())
+        val g = Graph(listOf(t))
+        val r = Router(g).route(g.nearest(19_000_000, 72_900_000), g.nearest(19_003_000, 72_900_000))!!
+        // The unposted middle piece doesn't count as a change.
+        assertEquals(listOf(0L to 50, 2000L to 30), g.limits(r))
+        assertEquals(listOf(1000L), g.tollStarts(r))
     }
 }

@@ -150,6 +150,32 @@ fun Graph.roads(route: Route): List<Pair<String, Long>> {
     return byName.entries.sortedByDescending { it.value }.map { it.key to it.value }
 }
 
+/** Where the posted limit changes along a route: (decimetres from the start, km/h). Unposted stretches are skipped. */
+fun Graph.limits(route: Route): List<Pair<Long, Int>> {
+    val out = ArrayList<Pair<Long, Int>>()
+    var at = 0L; var last = -1
+    for (arc in route.arcs) {
+        val e = tiles[fTile[arc]].edges[fEdge[arc]]
+        if (e.maxKmh > 0 && e.maxKmh != last) out += at to e.maxKmh
+        if (e.maxKmh > 0) last = e.maxKmh
+        at += e.lengthDm
+    }
+    return out
+}
+
+/** Where each toll stretch of a route begins, in decimetres from the start. */
+fun Graph.tollStarts(route: Route): List<Long> {
+    val out = ArrayList<Long>()
+    var at = 0L; var inToll = false
+    for (arc in route.arcs) {
+        val e = tiles[fTile[arc]].edges[fEdge[arc]]
+        if (e.toll && !inToll) out += at
+        inToll = e.toll
+        at += e.lengthDm
+    }
+    return out
+}
+
 /** Whether any part of a route is a toll road. */
 fun Graph.toll(route: Route): Boolean = route.arcs.any { tiles[fTile[it]].edges[fEdge[it]].toll }
 
