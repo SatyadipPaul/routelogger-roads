@@ -194,7 +194,7 @@ object Turn {
 }
 
 /** A turn on a route: [atDm] from the start, [angle] degrees (positive right), onto [road]. */
-class Maneuver(val atDm: Long, val kind: Int, val angle: Int, val road: String?)
+class Maneuver(val atDm: Long, val kind: Int, val angle: Int, val road: String?, val latE6: Int = 0, val lonE6: Int = 0)
 
 /**
  * The turns a driver needs told about: wherever the route meets other roads and bends by 30° or
@@ -243,7 +243,7 @@ fun Graph.maneuvers(route: Route): List<Maneuver> {
         return seen.size
     }
 
-    out += Maneuver(0, Turn.DEPART, 0, nameOf(route.arcs[0]))
+    out += Maneuver(0, Turn.DEPART, 0, nameOf(route.arcs[0]), lat[route.nodes[0]], lon[route.nodes[0]])
     var at = 0L
     var prevLine = line(route.arcs[0])
     at += fLen[route.arcs[0]]
@@ -265,16 +265,16 @@ fun Graph.maneuvers(route: Route): List<Maneuver> {
                 // Two junctions a few metres apart, as across a divided road, are one turn.
                 if (last.kind != Turn.DEPART && at - last.atDm < 300 && (last.angle > 0) == (d > 0)) {
                     val sum = last.angle + d
-                    out[out.size - 1] = Maneuver(last.atDm, Turn.of(sum), sum.toInt(), road ?: last.road)
+                    out[out.size - 1] = Maneuver(last.atDm, Turn.of(sum), sum.toInt(), road ?: last.road, last.latE6, last.lonE6)
                 } else {
-                    out += Maneuver(at, Turn.of(d), d.toInt(), road)
+                    out += Maneuver(at, Turn.of(d), d.toInt(), road, lat[v], lon[v])
                 }
             }
         }
         prevLine = next
         at += fLen[arc]
     }
-    out += Maneuver(at, Turn.ARRIVE, 0, null)
+    out += Maneuver(at, Turn.ARRIVE, 0, null, lat[route.nodes.last()], lon[route.nodes.last()])
     return out
 }
 
