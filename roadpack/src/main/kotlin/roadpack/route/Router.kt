@@ -176,6 +176,113 @@ fun Graph.tollStarts(route: Route): List<Long> {
     return out
 }
 
+/** Kinds of turn, from the driver's seat. */
+object Turn {
+    const val DEPART = 0; const val SLIGHT_LEFT = 1; const val LEFT = 2; const val SHARP_LEFT = 3
+    const val SLIGHT_RIGHT = 4; const val RIGHT = 5; const val SHARP_RIGHT = 6; const val U_TURN = 7; const val ARRIVE = 8
+
+    /** The kind for a change of heading of [deg] degrees (positive to the right) at a junction. */
+    fun of(deg: Double): Int {
+        val a = kotlin.math.abs(deg)
+        return when {
+            a >= 160 -> U_TURN
+            a >= 120 -> if (deg < 0) SHARP_LEFT else SHARP_RIGHT
+            a >= 45 -> if (deg < 0) LEFT else RIGHT
+            else -> if (deg < 0) SLIGHT_LEFT else SLIGHT_RIGHT
+        }
+    }
+}
+
+/** A turn on a route: [atDm] from the start, [angle] degrees (positive right), onto [road]. */
+class Maneuver(val atDm: Long, val kind: Int, val angle: Int, val road: String?)
+
+/**
+ * The turns a driver needs told about: wherever the route meets other roads and bends by 30° or
+ * more, or by 15° where the road forks. Plus where it starts and where it arrives.
+ */
+fun Graph.maneuvers(route: Route): List<Maneuver> {
+    val out = ArrayList<Maneuver>()
+    if (route.arcs.isEmpty()) return out
+    // Each arc's line in driving order, in local metres-ish units for headings.
+    fun line(arc: Int): Pair<IntArray, IntArray> {
+        val t = tiles[fTile[arc]]; val e = t.edges[fEdge[arc]]
+        val n = e.shapeLat.size + 2
+        val la = IntArray(n); val lo = IntArray(n)
+        for (k in 0 until n) {
+            val i = if (fRev[arc]) n - 1 - k else k
+            when (i) {
+                0 -> { la[k] = t.lat[e.from]; lo[k] = t.lon[e.from] }
+                n - 1 -> { la[k] = t.lat[e.to]; lo[k] = t.lon[e.to] }
+                else -> { la[k] = e.shapeLat[i - 1]; lo[k] = e.shapeLon[i - 1] }
+            }
+        }
+        return la to lo
+    }
+    val kx = kotlin.math.cos(Math.toRadians(lat[route.nodes[0]] / 1e6))
+    fun heading(la1: Int, lo1: Int, la2: Int, lo2: Int) =
+        Math.toDegrees(kotlin.math.atan2((lo2 - lo1) * kx, (la2 - la1).toDouble()))
+    /** Heading arriving at the end of a line, from a point about [m] metres back. */
+    fun headingIn(l: Pair<IntArray, IntArray>, m: Double = 20.0): Double {
+        val (la, lo) = l; val last = la.size - 1
+        var k = last - 1
+        while (k > 0 && dist(la[k], lo[k], la[last], lo[last], kx) < m) k--
+        return heading(la[k], lo[k], la[last], lo[last])
+    }
+    /** Heading leaving the start of a line, to a point about [m] metres on. */
+    fun headingOut(l: Pair<IntArray, IntArray>, m: Double = 20.0): Double {
+        val (la, lo) = l
+        var k = 1
+        while (k < la.size - 1 && dist(la[0], lo[0], la[k], lo[k], kx) < m) k++
+        return heading(la[0], lo[0], la[k], lo[k])
+    }
+    fun nameOf(arc: Int): String? = tiles[fTile[arc]].let { t -> t.edges[fEdge[arc]].name.takeIf { it >= 0 }?.let { t.names[it] } }
+    fun degree(v: Int): Int {
+        val seen = HashSet<Int>()
+        for (a in fStart[v] until fStart[v + 1]) seen += fTo[a]
+        for (a in bStart[v] until bStart[v + 1]) seen += bTo[a]
+        return seen.size
+    }
+
+    out += Maneuver(0, Turn.DEPART, 0, nameOf(route.arcs[0]))
+    var at = 0L
+    var prevLine = line(route.arcs[0])
+    at += fLen[route.arcs[0]]
+    for (i in 1 until route.arcs.size) {
+        val arc = route.arcs[i]
+        val next = line(arc)
+        val v = route.nodes[i]
+        if (degree(v) >= 3) {
+            var d = headingOut(next) - headingIn(prevLine)
+            while (d > 180) d -= 360
+            while (d <= -180) d += 360
+            val a = kotlin.math.abs(d)
+            if (a >= 30 || (a >= 15 && degree(v) >= 3 && nameOf(arc) != nameOf(route.arcs[i - 1]))) {
+                // The road it turns onto: this piece's name, or the next named piece's.
+                var road = nameOf(arc)
+                var j = i + 1
+                while (road == null && j < route.arcs.size && j < i + 4) road = nameOf(route.arcs[j++])
+                val last = out.last()
+                // Two junctions a few metres apart, as across a divided road, are one turn.
+                if (last.kind != Turn.DEPART && at - last.atDm < 300 && (last.angle > 0) == (d > 0)) {
+                    val sum = last.angle + d
+                    out[out.size - 1] = Maneuver(last.atDm, Turn.of(sum), sum.toInt(), road ?: last.road)
+                } else {
+                    out += Maneuver(at, Turn.of(d), d.toInt(), road)
+                }
+            }
+        }
+        prevLine = next
+        at += fLen[arc]
+    }
+    out += Maneuver(at, Turn.ARRIVE, 0, null)
+    return out
+}
+
+private fun dist(la1: Int, lo1: Int, la2: Int, lo2: Int, kx: Double): Double {
+    val dy = (la2 - la1) * 0.1113195; val dx = (lo2 - lo1) * 0.1113195 * kx
+    return kotlin.math.sqrt(dx * dx + dy * dy)
+}
+
 /** Whether any part of a route is a toll road. */
 fun Graph.toll(route: Route): Boolean = route.arcs.any { tiles[fTile[it]].edges[fEdge[it]].toll }
 

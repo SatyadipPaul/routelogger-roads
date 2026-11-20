@@ -9,7 +9,9 @@ import roadpack.format.RoadClass
 import roadpack.format.Tile
 import roadpack.route.Graph
 import roadpack.route.Router
+import roadpack.route.Turn
 import roadpack.route.limits
+import roadpack.route.maneuvers
 import roadpack.route.marks
 import roadpack.route.tollStarts
 import roadpack.route.roads
@@ -104,5 +106,26 @@ class PackTest {
         // The unposted middle piece doesn't count as a change.
         assertEquals(listOf(0L to 50, 2000L to 30), g.limits(r))
         assertEquals(listOf(1000L), g.tollStarts(r))
+    }
+
+    @Test fun turnsAreFoundAtJunctionsOnly() {
+        // North 200 m to a crossroads, then left (west) 200 m; a side road east at the crossroads,
+        // and a bend with no other road on the way north.
+        val la = intArrayOf(19_000_000, 19_001_000, 19_001_800, 19_001_800, 19_001_800)
+        val lo = intArrayOf(72_900_000, 72_900_000, 72_900_000, 72_898_100, 72_901_900)
+        val t = Tile(10, 0, 0, la, lo,
+            listOf(
+                Edge(0, 1, 1110, RoadClass.RESIDENTIAL, false, false, false, 0, 0, 0, IntArray(0), IntArray(0), emptyList()),
+                Edge(1, 2, 890, RoadClass.RESIDENTIAL, false, false, false, 0, 0, 0, IntArray(0), IntArray(0), emptyList()),
+                Edge(2, 3, 2000, RoadClass.RESIDENTIAL, false, false, false, 0, 0, 1, IntArray(0), IntArray(0), emptyList()),
+                Edge(2, 4, 2000, RoadClass.RESIDENTIAL, false, false, false, 0, 0, -1, IntArray(0), IntArray(0), emptyList()),
+            ), listOf("Station Road", "LBS Marg"), emptyList())
+        val g = Graph(listOf(t))
+        val r = Router(g).route(g.nearest(19_000_000, 72_900_000), g.nearest(19_001_800, 72_898_100))!!
+        val m = g.maneuvers(r)
+        assertEquals(listOf(Turn.DEPART, Turn.LEFT, Turn.ARRIVE), m.map { it.kind })
+        assertEquals(2000L, m[1].atDm)
+        assertEquals("LBS Marg", m[1].road)
+        assertEquals(-90.0, m[1].angle.toDouble(), 3.0)
     }
 }

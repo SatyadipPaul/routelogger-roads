@@ -3,6 +3,7 @@ package roadpack.bench
 import roadpack.format.Archive
 import roadpack.route.Graph
 import roadpack.route.Router
+import roadpack.route.maneuvers
 import java.io.File
 import kotlin.random.Random
 
@@ -44,6 +45,7 @@ fun main(args: Array<String>) {
         val ms = (System.nanoTime() - t) / 1e6
         if (r == null) println("$name: no route") else
             println("$name: ${"%.1f".format(r.lengthDm / 10000.0)} km, ${"%.0f".format(r.timeDs / 600.0)} min, ${"%.1f".format(ms)} ms, ${r.settled} settled")
+        if (r != null && System.getenv("TURNS") != null) g.maneuvers(r).forEach { println("    ${"%.2f".format(it.atDm / 10000.0)} km  kind ${it.kind}  ${it.angle}°  ${it.road ?: ""}") }
     }
 
     var mismatches = 0
