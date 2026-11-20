@@ -1,0 +1,55 @@
+name: Build road packs
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"   # Mondays 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-packs
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build and test the tool
+        run: ./gradlew -p roadpack --no-daemon --console=plain installDist test
+
+      - name: Download the India extract from Geofabrik
+        run: |
+          curl -fsSL --retry 3 --retry-delay 30 -o india.osm.pbf https://download.geofabrik.de/asia/india-latest.osm.pbf
+          ls -la india.osm.pbf
+
+      - name: Build packs
+        env:
+          JAVA_OPTS: "-Xmx13g"
+        run: |
+          mkdir -p out
+          roadpack/build/install/roadpack/bin/roadpack india.osm.pbf out 2>&1 | grep -v '^WARNING' | tee out/build.log
+          ls -la out
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="packs-$(date -u +%Y-%m-%d)"
+          if gh release view "$tag" >/dev/null 2>&1; then tag="$tag-$(date -u +%H%M)"; fi
+          gh release create "$tag" out/local.rpk out/main.rpk out/build.log \
+            --title "Road packs $(date -u +%Y-%m-%d)" \
+            --notes "India road packs built from Geofabrik's india-latest.osm.pbf. © OpenStreetMap contributors, ODbL 1.0." \
+            --latest
+          # Keep the newest three builds.
+          gh release list --limit 100 --json tagName --jq '.[].tagName' | grep '^packs-' | sort -r | tail -n +4 \
+            | xargs -r -I{} gh release delete {} --yes --cleanup-tag
